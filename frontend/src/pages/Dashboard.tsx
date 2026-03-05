@@ -116,11 +116,50 @@ const Dashboard = () => {
   };
 
   const copyToClipboard = (code: string, id: number) => {
-    navigator.clipboard.writeText(code);
+    // Works on both localhost and network IP (no HTTPS required)
+    const fallbackCopy = (text: string) => {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    };
+
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(code).catch(() => fallbackCopy(code));
+    } else {
+      fallbackCopy(code);
+    }
+
     setCopiedId(id);
     toast.success("Код скопійовано");
     setInstructionOpen(true);
     setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const copyBotLink = () => {
+    const link = "https://t.me/chargetrack_bot";
+    const fallbackCopy = (text: string) => {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(link).catch(() => fallbackCopy(link));
+    } else {
+      fallbackCopy(link);
+    }
+    toast.success("Посилання на бота скопійовано");
   };
 
   return (
@@ -135,9 +174,9 @@ const Dashboard = () => {
             <span className="font-bold text-xl tracking-tight text-foreground">ChargeTrack</span>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => window.open("https://t.me/chargetrack_bot", "_blank")} className="hidden sm:flex items-center gap-2 border-primary/20 hover:bg-primary/5 text-primary">
+            <Button variant="outline" size="sm" onClick={copyBotLink} className="hidden sm:flex items-center gap-2 border-primary/20 hover:bg-primary/5 text-primary">
               <Send className="w-4 h-4" />
-              Перейти до бота
+              @chargetrack_bot
             </Button>
             <Button variant="ghost" size="sm" onClick={handleLogout} className="text-muted-foreground hover:text-foreground">
               <LogOut className="w-4 h-4 mr-2" />
