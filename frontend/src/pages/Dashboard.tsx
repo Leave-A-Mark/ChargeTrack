@@ -21,6 +21,20 @@ interface BotUser {
   telegram_id: number | null;
 }
 
+interface Device {
+  id: number;
+  equipment_id: string;
+  name: string;
+  v1_offset: number;
+  v2_offset: number;
+  v3_offset: number;
+  v4_offset: number;
+  v5_offset: number;
+  v6_offset: number;
+  v7_offset: number;
+  active_sensors: string;
+}
+
 const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8000/api`;
 
 const Dashboard = () => {
@@ -33,8 +47,14 @@ const Dashboard = () => {
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [instructionOpen, setInstructionOpen] = useState(false);
 
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [deviceDialogOpen, setDeviceDialogOpen] = useState(false);
+  const [editingDevice, setEditingDevice] = useState<Device | null>(null);
+  const [deviceForm, setDeviceForm] = useState<Partial<Device>>({});
+
   useEffect(() => {
     fetchUsers();
+    fetchDevices();
   }, []);
 
   const fetchUsers = async () => {
@@ -46,6 +66,16 @@ const Dashboard = () => {
       toast.error("Помилка при завантаженні користувачів");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchDevices = async () => {
+    try {
+      const res = await fetch(`${API_URL}/devices`);
+      const data = await res.json();
+      setDevices(data);
+    } catch (error) {
+      toast.error("Помилка при завантаженні пристроїв");
     }
   };
 
@@ -113,6 +143,42 @@ const Dashboard = () => {
     } catch (error) {
       toast.error("Помилка при видаленні");
     }
+  };
+
+  const openEditDevice = (device: Device) => {
+    setEditingDevice(device);
+    setDeviceForm(device);
+    setDeviceDialogOpen(true);
+  };
+
+  const handleDeviceSave = async () => {
+    if (!editingDevice) return;
+    try {
+      const res = await fetch(`${API_URL}/devices/${editingDevice.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(deviceForm),
+      });
+      if (res.ok) {
+        toast.success("Налаштування пристрою збережено");
+        fetchDevices();
+        setDeviceDialogOpen(false);
+      }
+    } catch (error) {
+      toast.error("Помилка при збереженні пристрою");
+    }
+  };
+
+  const toggleSensor = (sensor: string) => {
+    const current = deviceForm.active_sensors || "";
+    const sensors = current.split(",").filter(Boolean);
+    let next: string[];
+    if (sensors.includes(sensor)) {
+      next = sensors.filter(s => s !== sensor);
+    } else {
+      next = [...sensors, sensor].sort();
+    }
+    setDeviceForm({ ...deviceForm, active_sensors: next.join(",") });
   };
 
   const copyToClipboard = (code: string, id: number) => {
@@ -276,6 +342,52 @@ const Dashboard = () => {
             </table>
           </div>
         </div>
+        {/* Title + Add Devices */}
+        <div className="flex items-center justify-between mt-12 mb-6">
+          <div>
+            <h2 className="text-2xl font-bold text-foreground">Обладнання</h2>
+            <p className="text-sm text-muted-foreground">Керування підключеними пристроями та калібрування</p>
+          </div>
+        </div>
+
+        {/* Devices Table */}
+        <div className="bg-card border border-border rounded-2xl overflow-hidden shadow-xl shadow-black/5 mb-20">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-border bg-muted/30">
+                  {["Назва", "ID", "Датчики (активні)", ""].map((h, i) => (
+                    <th key={i} className={`text-xs font-bold uppercase tracking-wider text-muted-foreground px-6 py-4 text-left`}>
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {devices.map((device) => (
+                  <tr key={device.id} className="hover:bg-muted/20 transition-colors group">
+                    <td className="px-6 py-4 text-sm font-semibold text-foreground">{device.name}</td>
+                    <td className="px-6 py-4 text-xs font-mono text-muted-foreground">{device.equipment_id}</td>
+                    <td className="px-6 py-4">
+                      <div className="flex flex-wrap gap-1">
+                        {device.active_sensors.split(",").filter(Boolean).map(s => (
+                          <span key={s} className="text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded uppercase font-bold">
+                            {s}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <Button variant="ghost" size="sm" onClick={() => openEditDevice(device)} className="text-muted-foreground hover:text-primary transition-colors">
+                        <Pencil className="w-4 h-4" />
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </main>
 
       {/* Add/Edit Dialog */}
@@ -332,6 +444,65 @@ const Dashboard = () => {
             </div>
             <Button onClick={() => setInstructionOpen(false)} className="w-full h-11 text-base font-semibold shadow-lg shadow-primary/20">
               Зрозуміло
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Device Calibration Dialog */}
+      <Dialog open={deviceDialogOpen} onOpenChange={setDeviceDialogOpen}>
+        <DialogContent className="sm:max-w-lg border-border bg-card shadow-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-bold">Налаштування пристрою: {editingDevice?.equipment_id}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-6 mt-4">
+            <div className="space-y-2">
+              <label className="text-sm font-semibold text-foreground/80">Назва пристрою</label>
+              <Input
+                value={deviceForm.name || ""}
+                onChange={(e) => setDeviceForm({ ...deviceForm, name: e.target.value })}
+                placeholder="Назва"
+                className="bg-muted/50"
+              />
+            </div>
+
+            <div>
+              <label className="text-sm font-semibold text-foreground/80 block mb-3">Корекція напруги (V)</label>
+              <div className="grid grid-cols-2 gap-4">
+                {["v1", "v2", "v3", "v4", "v5", "v6", "v7"].map(v => (
+                  <div key={v} className="flex items-center gap-2">
+                    <span className="text-xs font-bold w-6 uppercase text-muted-foreground">{v}:</span>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={deviceForm[`${v}_offset` as keyof Device] || 0}
+                      onChange={(e) => setDeviceForm({ ...deviceForm, [`${v}_offset`]: parseFloat(e.target.value) })}
+                      className="h-8 text-xs bg-muted/30"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="text-sm font-semibold text-foreground/80 block mb-3">Активні датчики</label>
+              <div className="flex flex-wrap gap-2">
+                {["v1", "v2", "v3", "v4", "v5", "v6", "v7"].map(v => (
+                  <Button
+                    key={v}
+                    variant={deviceForm.active_sensors?.includes(v) ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => toggleSensor(v)}
+                    className="h-8 px-3 text-xs uppercase font-bold"
+                  >
+                    {v}
+                  </Button>
+                ))}
+              </div>
+            </div>
+
+            <Button onClick={handleDeviceSave} className="w-full h-11 text-base font-semibold shadow-lg shadow-primary/20">
+              Зберегти налаштування
             </Button>
           </div>
         </DialogContent>

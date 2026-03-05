@@ -53,6 +53,20 @@ class SensorData(Base):
     wifi = Column(Integer, default=0)
     timestamp = Column(DateTime, default=lambda: datetime.now(UTC))
 
+class Device(Base):
+    __tablename__ = "devices"
+    id = Column(Integer, primary_key=True, index=True)
+    equipment_id = Column(String, unique=True, index=True)
+    name = Column(String)
+    v1_offset = Column(Float, default=0.0)
+    v2_offset = Column(Float, default=0.0)
+    v3_offset = Column(Float, default=0.0)
+    v4_offset = Column(Float, default=0.0)
+    v5_offset = Column(Float, default=0.0)
+    v6_offset = Column(Float, default=0.0)
+    v7_offset = Column(Float, default=0.0)
+    active_sensors = Column(String, default="v1,v2,v3,v4,v5,v6,v7")
+
 # Database initialization
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -94,6 +108,34 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
+# Device schemas
+class DeviceSchema(BaseModel):
+    id: int
+    equipment_id: str
+    name: str
+    v1_offset: float
+    v2_offset: float
+    v3_offset: float
+    v4_offset: float
+    v5_offset: float
+    v6_offset: float
+    v7_offset: float
+    active_sensors: str
+
+    class Config:
+        from_attributes = True
+
+class DeviceUpdate(BaseModel):
+    name: Optional[str] = None
+    v1_offset: Optional[float] = None
+    v2_offset: Optional[float] = None
+    v3_offset: Optional[float] = None
+    v4_offset: Optional[float] = None
+    v5_offset: Optional[float] = None
+    v6_offset: Optional[float] = None
+    v7_offset: Optional[float] = None
+    active_sensors: Optional[str] = None
+
 # FastAPI App
 app = FastAPI(title="ChargeTrack API")
 
@@ -129,6 +171,34 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
 @app.get("/api/subscribers", response_model=List[SubscriberSchema])
 def get_subscribers(db: Session = Depends(get_db)):
     return db.query(BotSubscriber).all()
+
+# Device Endpoints
+@app.get("/api/devices", response_model=List[DeviceSchema])
+def get_devices(db: Session = Depends(get_db)):
+    return db.query(Device).all()
+
+@app.put("/api/devices/{device_id}", response_model=DeviceSchema)
+def update_device(device_id: int, update: DeviceUpdate, db: Session = Depends(get_db)):
+    device = db.query(Device).filter(Device.id == device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    update_data = update.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(device, key, value)
+    
+    db.commit()
+    db.refresh(device)
+    return device
+
+@app.delete("/api/devices/{device_id}")
+def delete_device(device_id: int, db: Session = Depends(get_db)):
+    device = db.query(Device).filter(Device.id == device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    db.delete(device)
+    db.commit()
+    return {"status": "success"}
 
 @app.post("/api/subscribers", response_model=SubscriberSchema)
 def create_subscriber(sub: SubscriberCreate, db: Session = Depends(get_db)):

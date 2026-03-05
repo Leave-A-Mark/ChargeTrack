@@ -1,117 +1,93 @@
-import os
-import pytz
-from datetime import datetime, timedelta, UTC
 from flask import Flask, request, jsonify
 from sqlalchemy.orm import Session
-from main import SessionLocal, SensorData, init_db
+from datetime import datetime, UTC
+import pytz
+from main import SessionLocal, SensorData, init_db, Device
 
 # Ensure DB tables are created
 init_db()
 
 app = Flask(__name__)
 
-def apply_voltage_correction(device_id, sensor_id, voltage):
-    """Применить коррекцию напряжения для указанного датчика устройства"""
+def apply_voltage_correction(db: Session, device_id: str, sensor_id: str, voltage: float):
+    """Применить коррекцию напряжения для указанного датчика устройства из БД"""
     try:
-        # Импортируем конфигурацию
-        import config
-        import importlib
-        importlib.reload(config)
-        
-        # Проверяем наличие устройства и датчика в коррекциях
-        if device_id in config.VOLTAGE_CORRECTIONS:
-            corrections = config.VOLTAGE_CORRECTIONS[device_id]
-            if sensor_id in corrections:
-                correction = corrections[sensor_id]
-                return voltage + correction
+        device = db.query(Device).filter(Device.equipment_id == device_id).first()
+        if device:
+            # Получаем коррекцию из соответствующего поля модели
+            offset_field = f"{sensor_id}_offset"
+            correction = getattr(device, offset_field, 0.0)
+            return voltage + correction
     except Exception as e:
         print(f"Ошибка при применении коррекции для {device_id} датчик {sensor_id}: {e}")
     
     return voltage
 
-def ensure_device_in_config(device_id):
-    """Проверяет наличие устройства в конфигурации и добавляет его при необходимости"""
+def safe_float(value, default=-1.0):
+    """Безопасно преобразует значение в float, обрабатывая запятые и списки"""
+    if value is None:
+        return default
+    
+    # Если пришел список (PowerShell может так отправлять), берем первый элемент
+    if isinstance(value, (list, tuple)) and len(value) > 0:
+        value = value[0]
+    
     try:
-        import config
-        if device_id not in config.DEVICE_NAME_MAPPING:
-            update_config_file(device_id)
+        # Очищаем от пробелов и заменяем запятую на точку
+        s_val = str(value).strip().replace(',', '.')
+        return float(s_val)
+    except (ValueError, TypeError):
+        print(f"DEBUG: Failed to parse float from: {repr(value)}")
+        return default
+
+def ensure_device_exists(db: Session, device_id: str):
+    """Проверяет наличие устройства в базе данных и добавляет его при необходимости з дефолтними значеннями"""
+    try:
+        device = db.query(Device).filter(Device.equipment_id == device_id).first()
+        if not device:
+            device = Device(
+                equipment_id=device_id,
+                name=device_id,
+                v1_offset=0.0,
+                v2_offset=0.0,
+                v3_offset=0.0,
+                v4_offset=0.0,
+                v5_offset=0.0,
+                v6_offset=0.0,
+                v7_offset=0.0,
+                active_sensors="v1,v2,v3,v4,v5,v6,v7"
+            )
+            db.add(device)
+            db.commit()
     except Exception as e:
         print(f"Ошибка при проверке устройства {device_id}: {e}")
-
-def update_config_file(device_id):
-    """Обновляет конфигурационный файл, добавляя новое устройство"""
-    try:
-        config_path = "config.py"
-        with open(config_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        
-        new_lines = []
-        mapping_added = False
-        corrections_added = False
-        active_sensors_added = False
-        
-        current_section = None
-        for line in lines:
-            new_lines.append(line)
-            if "DEVICE_NAME_MAPPING = {" in line:
-                current_section = "mapping"
-            elif "VOLTAGE_CORRECTIONS = {" in line:
-                current_section = "corrections"
-            elif "ACTIVE_SENSORS = {" in line:
-                current_section = "active"
-            
-            if current_section == "mapping" and line.strip() == "}":
-                if not mapping_added:
-                    new_lines.insert(-1, f'    "{device_id}": "{device_id}",\n')
-                current_section = None
-            elif current_section == "corrections" and line.strip() == "}":
-                if not corrections_added:
-                    new_lines.insert(-1, f'    "{device_id}": {{\n')
-                    for v in ["v1", "v2", "v3", "v4", "v5", "v6", "v7"]:
-                        new_lines.insert(-1, f'        "{v}": 0.00,\n')
-                    new_lines.insert(-1, f'    }},\n')
-                current_section = None
-            elif current_section == "active" and line.strip() == "}":
-                if not active_sensors_added:
-                    new_lines.insert(-1, f'    "{device_id}": ["v1", "v2", "v3", "v4", "v5", "v6", "v7"],\n')
-                current_section = None
-
-            if f'"{device_id}":' in line:
-                if current_section == "mapping": mapping_added = True
-                elif current_section == "corrections": corrections_added = True
-                elif current_section == "active": active_sensors_added = True
-
-        with open(config_path, "w", encoding="utf-8") as f:
-            f.writelines(new_lines)
-    except Exception as e:
-        print(f"Ошибка при обновлении конфигурации: {e}")
 
 @app.route('/push', methods=['POST'])
 def push_data():
     data = request.form
+    print(f"DEBUG: Received data: {dict(data)}")
     device = data.get("device")
     if not device:
         return "Missing device name", 400
 
     try:
-        wifi_signal = int(data.get("wifi", 0))
-        v2 = float(data.get("v2", -1.0))
-        v4 = float(data.get("v4", -1.0))
-        v6 = float(data.get("v6", -1.0))
-        v7 = float(data.get("v7", -1.0))
-        
-        v2_c = apply_voltage_correction(device, "v2", v2)
-        v4_c = apply_voltage_correction(device, "v4", v4)
-        v6_c = apply_voltage_correction(device, "v6", v6)
-        v7_c = apply_voltage_correction(device, "v7", v7)
-        
-        v1_c = apply_voltage_correction(device, "v1", v7_c - v2_c)
-        v3_c = apply_voltage_correction(device, "v3", v7_c - v4_c)
-        v5_c = apply_voltage_correction(device, "v5", v7_c - v6_c)
-        
-        ensure_device_in_config(device)
-
         db = SessionLocal()
+        ensure_device_exists(db, device)
+
+        wifi_signal = int(safe_float(data.get("wifi"), 0))
+        v2 = safe_float(data.get("v2"))
+        v4 = safe_float(data.get("v4"))
+        v6 = safe_float(data.get("v6"))
+        v7 = safe_float(data.get("v7"))
+        
+        v2_c = apply_voltage_correction(db, device, "v2", v2)
+        v4_c = apply_voltage_correction(db, device, "v4", v4)
+        v6_c = apply_voltage_correction(db, device, "v6", v6)
+        v7_c = apply_voltage_correction(db, device, "v7", v7)
+        
+        v1_c = apply_voltage_correction(db, device, "v1", v7_c - v2_c)
+        v3_c = apply_voltage_correction(db, device, "v3", v7_c - v4_c)
+        v5_c = apply_voltage_correction(db, device, "v5", v7_c - v6_c)
         entry = SensorData(
             equipment_id=device,
             v1=round(v1_c, 2), v2=round(v2_c, 2),
