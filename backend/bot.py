@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, UTC
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, BufferedInputFile
+import html
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -62,13 +63,13 @@ def get_device_selection_kb(db: Session, user_id: int, action: str):
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 # Timezone helper
-def to_local_time(utc_dt):
-    if not utc_dt: return None
-    # Ensure timezone-aware if it's naive
-    if utc_dt.tzinfo is None:
-        utc_dt = utc_dt.replace(tzinfo=UTC)
-    local_tz = pytz.timezone('Europe/Kiev')
-    return utc_dt.astimezone(local_tz)
+def to_local_time(dt):
+    if not dt: return None
+    # Если время наивное, считаем что оно в UTC (как сохраняет serv.py)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    # Конвертируем в системное локальное время
+    return dt.astimezone()
 
 # Graph generation
 def create_voltage_graph(db: Session, device_id: str, data: list):
@@ -241,8 +242,9 @@ async def process_monitor(message: types.Message, equipment_id: str):
         active_sensors_str = device_obj.active_sensors if device_obj else "v1,v2,v3,v4,v5,v6,v7"
         active_sensors = active_sensors_str.split(",")
         
-        is_mock = "(MOCK)" if not hasattr(data, 'id') else ""
-        text = f"🔌 **{device_name}** {is_mock}\n"
+        is_mock = " (MOCK)" if not hasattr(data, 'id') else ""
+        safe_name = html.escape(device_name)
+        text = f"🔌 <b>{safe_name}</b>{is_mock}\n"
         text += f"🕒 Час: {to_local_time(data.timestamp).strftime('%H:%M:%S')}\n"
         
         for s in ["v1", "v2", "v3", "v4", "v5", "v6"]:
@@ -257,7 +259,7 @@ async def process_monitor(message: types.Message, equipment_id: str):
             text += f"⚡️ Загальна: {data.v7}V\n"
         
         text += f"📶 Wi-Fi: {data.wifi}%"
-        await message.answer(text, parse_mode="Markdown")
+        await message.answer(text, parse_mode="HTML")
     db.close()
 
 @dp.message(F.text.in_(["📈 Графік", "📈 График"]))
@@ -298,8 +300,9 @@ async def process_graph(message: types.Message, equipment_id: str):
             device_obj = db.query(Device).filter(Device.equipment_id == equipment_id).first()
             device_name = device_obj.name if device_obj else equipment_id
             is_mock = " (MOCK)" if MOCK_MODE and len(data) > 0 and not hasattr(data[0], 'id') else ""
-            caption = f"Історія напруг за 24г для {device_name}{is_mock}"
-            await bot.send_photo(message.chat.id, photo, caption=caption)
+            safe_name = html.escape(device_name)
+            caption = f"Історія напруг за 24г для {safe_name}{is_mock}"
+            await bot.send_photo(message.chat.id, photo, caption=caption, parse_mode="HTML")
     db.close()
 
 @dp.message(F.text.in_(["🔍 Деталі", "🔍 Детали"]))
@@ -340,8 +343,9 @@ async def process_details(message: types.Message, equipment_id: str):
             device_obj = db.query(Device).filter(Device.equipment_id == equipment_id).first()
             device_name = device_obj.name if device_obj else equipment_id
             is_mock = " (MOCK)" if MOCK_MODE and len(data) > 0 and not hasattr(data[0], 'id') else ""
-            caption = f"Детальні графіки датчиків для {device_name}{is_mock}"
-            await bot.send_photo(message.chat.id, photo, caption=caption)
+            safe_name = html.escape(device_name)
+            caption = f"Детальні графіки датчиків для {safe_name}{is_mock}"
+            await bot.send_photo(message.chat.id, photo, caption=caption, parse_mode="HTML")
         else:
             await message.answer(f"Немає активних датчиків для пристрою {equipment_id}.")
     db.close()

@@ -66,7 +66,15 @@ def ensure_device_exists(db: Session, device_id: str):
 def push_data():
     data = request.form
     print(f"DEBUG: Received data: {dict(data)}")
-    device = data.get("device")
+    
+    # Пытаемся достать значения более надежно для мульти-велью полей
+    def get_first_value(key):
+        vals = data.getlist(key)
+        if not vals: 
+            return data.get(key) # fallback
+        return vals[0]
+
+    device = get_first_value("device")
     if not device:
         return "Missing device name", 400
 
@@ -74,11 +82,11 @@ def push_data():
         db = SessionLocal()
         ensure_device_exists(db, device)
 
-        wifi_signal = int(safe_float(data.get("wifi"), 0))
-        v2 = safe_float(data.get("v2"))
-        v4 = safe_float(data.get("v4"))
-        v6 = safe_float(data.get("v6"))
-        v7 = safe_float(data.get("v7"))
+        wifi_signal = int(safe_float(get_first_value("wifi"), 0))
+        v2 = safe_float(get_first_value("v2"))
+        v4 = safe_float(get_first_value("v4"))
+        v6 = safe_float(get_first_value("v6"))
+        v7 = safe_float(get_first_value("v7"))
         
         v2_c = apply_voltage_correction(db, device, "v2", v2)
         v4_c = apply_voltage_correction(db, device, "v4", v4)
