@@ -248,7 +248,8 @@ async def process_monitor(message: types.Message, sub_id: int, equipment_id: str
     if not data:
         device_obj = db.query(Device).filter(Device.equipment_id == equipment_id).first()
         dev_name = device_obj.name if device_obj else equipment_id
-        await message.answer(f"Дані для <b>{html.escape(dev_name)} ({sub.name})</b> поки не надійшли.", parse_mode="HTML")
+        await message.answer(f"Дані для <b>{html.escape(dev_name)} ({sub.name})</b> поки не надійшли.", 
+                             parse_mode="HTML", reply_markup=get_main_keyboard())
     else:
         device_obj = db.query(Device).filter(Device.equipment_id == equipment_id).first()
         dev_name = device_obj.name if device_obj else equipment_id
@@ -277,7 +278,7 @@ async def process_monitor(message: types.Message, sub_id: int, equipment_id: str
             text += f"📉 Компенсована: <b>{v_comp:.2f}V</b> (Load=1.0)\n"
         
         text += f"📶 Wi-Fi: {data.wifi}%"
-        await message.answer(text, parse_mode="HTML")
+        await message.answer(text, parse_mode="HTML", reply_markup=get_main_keyboard())
     db.close()
 
 @dp.message(F.text.in_(["📈 Графік", "📈 График"]))
@@ -328,7 +329,8 @@ async def process_graph(message: types.Message, sub_id: int, equipment_id: str):
             is_mock = " (MOCK)" if MOCK_MODE and len(data) > 0 and not hasattr(data[0], 'id') else ""
             safe_name = html.escape(dev_name)
             caption = f"Історія напруг за 24г для {safe_name} ({sub.name}){is_mock}"
-            await bot.send_photo(message.chat.id, photo, caption=caption, parse_mode="HTML")
+            await bot.send_photo(message.chat.id, photo, caption=caption, parse_mode="HTML", 
+                                 reply_markup=get_main_keyboard())
     db.close()
 
 @dp.message(F.text == "📊 Звіти")
@@ -560,7 +562,8 @@ async def process_details(message: types.Message, sub_id: int, equipment_id: str
             is_mock = " (MOCK)" if MOCK_MODE and len(data) > 0 and not hasattr(data[0], 'id') else ""
             safe_name = html.escape(dev_name)
             caption = f"Детальні графіки датчиків для {safe_name} ({sub.name}){is_mock}"
-            await bot.send_photo(message.chat.id, photo, caption=caption, parse_mode="HTML")
+            await bot.send_photo(message.chat.id, photo, caption=caption, parse_mode="HTML", 
+                                 reply_markup=get_main_keyboard())
         else:
             await message.answer(f"Немає активних датчиків для пристрою {equipment_id}.")
     db.close()
