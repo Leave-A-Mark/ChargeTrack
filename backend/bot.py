@@ -8,7 +8,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import pytz
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, BufferedInputFile
@@ -38,8 +38,8 @@ scheduler = AsyncIOScheduler()
 def get_main_keyboard():
     keyboard = [
         [KeyboardButton(text="📊 Моніторинг"), KeyboardButton(text="📈 Графік")],
-        [KeyboardButton(text="🔍 Деталі"), KeyboardButton(text="➕ Додати код користувача")],
-        [KeyboardButton(text="🛑 Відключення")]
+        [KeyboardButton(text="🔍 Деталі"), KeyboardButton(text="📊 Звіти")],
+        [KeyboardButton(text="➕ Додати код користувача"), KeyboardButton(text="🛑 Відключення")]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
@@ -66,19 +66,14 @@ def get_device_selection_kb(db: Session, user_id: int, action: str):
 
 # Timezone helper
 def to_local_time(dt):
-    if not dt: return None
-    # Если время наивное, считаем что оно в UTC (как сохраняет serv.py)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    # Конвертируем в системное локальное время
-    return dt.astimezone()
+    return dt
 
 # Graph generation
 def create_voltage_graph(db: Session, device_id: str, data: list):
     if not data:
         return None
     
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(15, 8), dpi=120)
     times = [to_local_time(d.timestamp) for d in data]
     
     # Get device settings from DB
@@ -96,12 +91,12 @@ def create_voltage_graph(db: Session, device_id: str, data: list):
         v7 = [d.v7 for d in data]
         plt.plot(times, v7, label='Загальна (V7)', linewidth=2, linestyle='--')
 
-    plt.title(f"Напруга за 24г: {device_name}")
-    plt.xlabel("Час")
-    plt.ylabel("Напруга (V)")
-    plt.legend()
+    plt.title(f"Напруга за 24г: {device_name}", fontsize=14, fontweight='bold')
+    plt.xlabel("Час", fontsize=12)
+    plt.ylabel("Напруга (V)", fontsize=12)
+    plt.legend(fontsize=10)
     plt.grid(True, alpha=0.3)
-    plt.xticks(rotation=45)
+    plt.xticks(rotation=45, fontsize=10)
     plt.tight_layout()
 
     buf = io.BytesIO()
@@ -122,13 +117,13 @@ def create_detailed_voltage_graph(db: Session, device_id: str, data: list):
         return None
 
     num_sensors = len(active_sensors)
-    fig, axes = plt.subplots(num_sensors, 1, figsize=(12, 4 * num_sensors), sharex=True)
+    fig, axes = plt.subplots(num_sensors, 1, figsize=(45, 6 * num_sensors), sharex=True, dpi=200)
     if num_sensors == 1:
         axes = [axes]
     
     times = [to_local_time(d.timestamp) for d in data]
     device_name = device_obj.name if device_obj else device_id
-    fig.suptitle(f"Графіки активних датчиків пристрою \"{device_name}\"", fontsize=16, fontweight='bold')
+    fig.suptitle(f"Графіки активних датчиків пристрою \"{device_name}\"", fontsize=50, fontweight='bold')
 
     for i, sensor in enumerate(active_sensors):
         ax = axes[i]
@@ -139,10 +134,11 @@ def create_detailed_voltage_graph(db: Session, device_id: str, data: list):
         v_mean = sum(vals) / len(vals)
         v_last = vals[-1]
         
-        ax.plot(times, vals, marker='.', markersize=4, linestyle='-', linewidth=1.5)
-        ax.set_title(f"Акумулятор №{sensor[1:]}", fontweight='bold')
-        ax.set_ylabel("Напруга (B)")
-        ax.grid(True, alpha=0.2)
+        ax.plot(times, vals, marker='.', markersize=6, linestyle='-', linewidth=3)
+        ax.set_title(f"Акумулятор №{sensor[1:]}", fontweight='bold', fontsize=35)
+        ax.set_ylabel("Напруга (B)", fontsize=30)
+        ax.tick_params(axis='both', which='major', labelsize=20)
+        ax.grid(True, alpha=0.4)
         
         # Stats box
         stats_text = (
@@ -151,12 +147,13 @@ def create_detailed_voltage_graph(db: Session, device_id: str, data: list):
             f"Макс: {v_max:.3f}V\n"
             f"Середнє: {v_mean:.3f}V"
         )
-        props = dict(boxstyle='round', facecolor='lightblue', alpha=0.5)
-        ax.text(0.02, 0.95, stats_text, transform=ax.transAxes, fontsize=8,
-                verticalalignment='top', bbox=props)
+        props = dict(boxstyle='round', facecolor='lightblue', alpha=0.7)
+        ax.text(0.01, 0.95, stats_text, transform=ax.transAxes, fontsize=20,
+                verticalalignment='top', bbox=props, fontweight='bold')
 
-    plt.xticks(rotation=45)
-    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    plt.xticks(rotation=45, fontsize=22)
+    # Removing the redundant and smaller fig.suptitle
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
 
     buf = io.BytesIO()
     plt.savefig(buf, format='png', dpi=100)
@@ -177,7 +174,7 @@ async def send_morning_reports():
                 # Розділяємо ID обладнання
                 equipment_ids = [eid.strip() for eid in sub.equipment_id.split(",") if eid.strip()]
                 for eid in equipment_ids:
-                    cutoff = datetime.now(UTC) - timedelta(hours=24)
+                    cutoff = datetime.now() - timedelta(hours=24)
                     data = db.query(SensorData).filter(
                         SensorData.equipment_id == eid,
                         SensorData.timestamp >= cutoff
@@ -245,7 +242,7 @@ async def process_monitor(message: types.Message, sub_id: int, equipment_id: str
             v6=round(random.uniform(0.1, 0.4), 2),
             v7=round(random.uniform(26.0, 27.0), 2),
             wifi=random.randint(40, 95),
-            timestamp=datetime.now(UTC)
+            timestamp=datetime.now()
         )
 
     if not data:
@@ -261,18 +258,23 @@ async def process_monitor(message: types.Message, sub_id: int, equipment_id: str
         is_mock = " (MOCK)" if not hasattr(data, 'id') else ""
         safe_name = html.escape(dev_name)
         text = f"🔌 <b>{safe_name} ({sub.name})</b>{is_mock}\n"
-        text += f"🕒 Час: {to_local_time(data.timestamp).strftime('%H:%M:%S')}\n"
+        text += f"🕒 Час: {to_local_time(data.timestamp).strftime('%H:%M:%S')}\n\n"
         
-        for s in ["v1", "v2", "v3", "v4", "v5", "v6"]:
-            if s in active_sensors:
-                val = getattr(data, s)
-                text += f"{s.upper()}: {val}V, "
+        battery_count = device_obj.battery_count if device_obj else 6
         
-        if text.endswith(", "): text = text[:-2] + "\n"
-        else: text += "\n"
-
+        for i in range(1, battery_count - 1):
+            s_key = f"v{i}"
+            if s_key in active_sensors:
+                val = getattr(data, s_key)
+                text += f"🔋 Акумулятор {i}: <b>{val}V</b>\n"
+        
         if "v7" in active_sensors:
-            text += f"⚡️ Загальна: {data.v7}V\n"
+            text += f"\n⚡️ Загальна: <b>{data.v7}V</b>\n"
+            
+            # Voltage Compensation logic (Constants: S=2)
+            S = 2
+            v_comp = data.v7 + (0.1 * S * 1.0)
+            text += f"📉 Компенсована: <b>{v_comp:.2f}V</b> (Load=1.0)\n"
         
         text += f"📶 Wi-Fi: {data.wifi}%"
         await message.answer(text, parse_mode="HTML")
@@ -304,7 +306,7 @@ async def process_graph(message: types.Message, sub_id: int, equipment_id: str):
         return
 
     # equipment_id використовується з аргументів
-    cutoff = datetime.now(UTC) - timedelta(hours=24)
+    cutoff = datetime.now() - timedelta(hours=24)
     data = db.query(SensorData).filter(
         SensorData.equipment_id == equipment_id,
         SensorData.timestamp >= cutoff
@@ -327,6 +329,187 @@ async def process_graph(message: types.Message, sub_id: int, equipment_id: str):
             safe_name = html.escape(dev_name)
             caption = f"Історія напруг за 24г для {safe_name} ({sub.name}){is_mock}"
             await bot.send_photo(message.chat.id, photo, caption=caption, parse_mode="HTML")
+    db.close()
+
+@dp.message(F.text == "📊 Звіти")
+async def cmd_reports(message: types.Message):
+    db = SessionLocal()
+    kb = get_device_selection_kb(db, message.from_user.id, "report_period")
+    db.close()
+    
+    if not kb:
+        await message.answer("У вас немає підключених пристроїв.")
+        return
+    
+    await message.answer("Оберіть пристрій для отримання звіту:", reply_markup=kb)
+
+async def process_report_selection(message: types.Message, device_id: str):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1 день", callback_data=f"gen_report:{device_id}:1")],
+        [InlineKeyboardButton(text="3 дні", callback_data=f"gen_report:{device_id}:3")],
+        [InlineKeyboardButton(text="Тиждень", callback_data=f"gen_report:{device_id}:7")],
+        [InlineKeyboardButton(text="Місяць", callback_data=f"gen_report:{device_id}:30")]
+    ])
+    
+    await message.answer(f"Оберіть період звіту для <b>{device_id}</b>:", reply_markup=keyboard, parse_mode="HTML")
+
+@dp.callback_query(F.data.startswith("report_period:"))
+async def callback_report_period_legacy(callback: types.CallbackQuery):
+    # This might be used if something else calls it, but we'll mainly use sel: now
+    device_id = callback.data.split(":")[1]
+    await process_report_selection(callback.message, device_id)
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("gen_report:"))
+async def callback_gen_report(callback: types.CallbackQuery):
+    _, device_id, days = callback.data.split(":")
+    days = int(days)
+    
+    await callback.answer("Аналізую дані... 🔍")
+    
+    db = SessionLocal()
+    device_obj = db.query(Device).filter(Device.equipment_id == device_id).first()
+    if not device_obj:
+        db.close()
+        await callback.message.answer("Пристрій не знайдено.")
+        return
+
+    cutoff = datetime.now() - timedelta(days=days)
+    # Pull all sensor data for the period
+    sensor_data = db.query(SensorData).filter(
+        SensorData.equipment_id == device_id,
+        SensorData.timestamp >= cutoff
+    ).order_by(SensorData.timestamp).all()
+
+    if not sensor_data:
+        db.close()
+        await callback.message.edit_text(f"❌ Немає даних для {device_obj.name} за останні {days} дн.")
+        return
+
+    # Universal Battery Constants (User simplified: always the same)
+    N = device_obj.battery_count or 6
+    C_one = 200.0
+    V_nom_one = 12.0
+    S = 2
+    DOD_limit = 0.3
+    
+    # Calculation of Constants
+    V_sys = V_nom_one * S
+    E_total = N * C_one * V_nom_one
+    E_safe = E_total * DOD_limit
+    V_max = 12.4 * S
+    V_min = 11.5 * S
+    V_range = V_max - V_min
+
+    # Threshold for outage detection (AC_Lost)
+    # Typically slightly above V_max or based on grid presence
+    THRESHOLD_OUTAGE = V_max + 0.5 
+
+    # Step 1: Identification of Outage Events
+    events = []
+    current_event = None
+    
+    for i, p in enumerate(sensor_data):
+        v_curr = p.v7
+        v_prev = sensor_data[i-1].v7 if i > 0 else v_curr
+        
+        # Outage: voltage drop below threshold
+        is_low = v_curr < (V_max * 1.02) # Looking for drop below charging levels
+        if is_low:
+            if current_event is None:
+                # Start of outage (AC_Lost)
+                v_start = min(v_prev, V_max)
+                current_event = {
+                    'start_time': p.timestamp,
+                    'v_start': v_start,
+                    'v_min': v_curr,
+                    'v_last': v_curr,
+                    'end_time': p.timestamp,
+                    'warning': False
+                }
+            else:
+                current_event['v_min'] = min(current_event['v_min'], v_curr)
+                current_event['v_last'] = v_curr
+                current_event['end_time'] = p.timestamp
+                if v_curr < V_min:
+                    current_event['warning'] = True
+        else:
+            if current_event:
+                events.append(current_event)
+                current_event = None
+    if current_event:
+        events.append(current_event)
+
+    # Aggregates
+    stats = {"DISCHARGE": {"time": timedelta(), "wh": 0.0}, 
+             "CHARGE": {"time": timedelta(), "wh": 0.0}, 
+             "MAINTENANCE": {"time": timedelta(), "wh": 0.0}}
+
+    total_wh_discharged = 0.0
+    total_wh_charged = 0.0
+    total_outage_time = timedelta()
+    has_warning = False
+
+    for e in events:
+        duration = e['end_time'] - e['start_time']
+        if duration < timedelta(minutes=1): continue 
+        
+        total_outage_time += duration
+        
+        # Energy Out: Formula (V_start - V_end) / V_range * E_safe
+        # For historical report, V_end is the voltage at the end of the outage
+        wh_used = ((e['v_start'] - e['v_last']) / V_range) * E_safe
+        total_wh_discharged += max(0, wh_used)
+        
+        if e['warning']:
+            has_warning = True
+            
+        # Simplistic recharge estimation (assuming it recharges what it lost)
+        total_wh_charged += max(0, wh_used) * 1.1 # 10% overhead for charging efficiency
+
+    stats["DISCHARGE"]["time"] = total_outage_time
+    stats["DISCHARGE"]["wh"] = total_wh_discharged
+    stats["CHARGE"]["wh"] = total_wh_charged
+
+    # Grid-ON distribution (Charging vs Maintenance)
+    for i in range(1, len(sensor_data)):
+        p = sensor_data[i]
+        prev = sensor_data[i-1]
+        if p.v7 >= 25.8: # Grid is ON (Voltages above battery static max)
+            dur = p.timestamp - prev.timestamp
+            # Bulk/Absorption starts typically above Float levels
+            if p.v7 > 26.6: # Active Charging Stage
+                stats["CHARGE"]["time"] += dur
+            else: # Float / Maintenance Stage (including 26.22-26.4V)
+                stats["MAINTENANCE"]["time"] += dur
+
+    def format_td(td):
+        total_sec = int(td.total_seconds())
+        h = total_sec // 3600
+        m = (total_sec % 3600) // 60
+        return f"{h}г {m}хв"
+
+    energy_from_grid = stats["CHARGE"]["wh"] / 0.85
+    energy_to_devices = stats["DISCHARGE"]["wh"]
+
+    text = f"<b>📊 Звіт по пристрою: {device_obj.name}</b>\n"
+    text += f"📅 Період: останніх {days} дн.\n\n"
+    
+    text += f"🔋 <b>Розрядка (без світла):</b> {format_td(stats['DISCHARGE']['time'])}\n"
+    text += f"   ⇢ Віддано пристроям: <b>{energy_to_devices:.1f} Wh</b>\n\n"
+    
+    text += f"🔌 <b>Зарядка:</b> {format_td(stats['CHARGE']['time'])}\n"
+    text += f"   ⇢ Взято з мережі (прибл.): <b>{energy_from_grid:.1f} Wh</b>\n\n"
+    
+    text += f"✅ <b>Підтримка (зі світлом):</b> {format_td(stats['MAINTENANCE']['time'])}\n\n"
+    
+    if has_warning:
+        text += f"⚠️ <b>Критичний розряд!</b> Глубина перевищила безпечний ліміт.\n\n"
+    
+    text += f"<i>* Конфігурація: {N} шт. (200Ah 12V, S=2).</i>\n"
+    text += f"<i>* Ефективна енергія (Safe Capacity): {E_safe/1000:.1f} kWh.</i>"
+
+    await callback.message.edit_text(text, parse_mode="HTML")
     db.close()
 
 @dp.message(F.text.in_(["🔍 Деталі", "🔍 Детали"]))
@@ -355,7 +538,7 @@ async def process_details(message: types.Message, sub_id: int, equipment_id: str
         return
 
     # equipment_id використовується з аргументів
-    cutoff = datetime.now(UTC) - timedelta(hours=24)
+    cutoff = datetime.now() - timedelta(hours=24)
     data = db.query(SensorData).filter(
         SensorData.equipment_id == equipment_id,
         SensorData.timestamp >= cutoff
@@ -417,6 +600,7 @@ async def callback_select_device(callback: types.CallbackQuery):
             if action == "mon": await process_monitor(callback.message, sid, eid)
             elif action == "gra": await process_graph(callback.message, sid, eid)
             elif action == "det": await process_details(callback.message, sid, eid)
+            elif action == "report_period": await process_report_selection(callback.message, eid)
         
         db.close()
     except Exception as e:
@@ -489,7 +673,7 @@ def generate_mock_history(equipment_id):
     # Helper to avoid code duplication
     data = []
     for i in range(48): # more points for smoother graph
-        ts = datetime.now(UTC) - timedelta(hours=24) + timedelta(minutes=30*i)
+        ts = datetime.now() - timedelta(hours=24) + timedelta(minutes=30*i)
         data.append(SensorData(
             equipment_id=equipment_id,
             v1=round(random.uniform(26.4, 26.55), 2),

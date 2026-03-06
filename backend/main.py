@@ -1,9 +1,11 @@
 import os
 import uuid
+import contextlib
 import urllib.parse
 from typing import List, Optional
-from datetime import datetime, UTC
-from fastapi import FastAPI, Depends, HTTPException, status
+from datetime import datetime
+from fastapi import FastAPI, Depends, HTTPException, status, Request
+from pydantic import BaseModel, ConfigDict
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import sessionmaker, Session, relationship, declarative_base
@@ -50,7 +52,26 @@ class SensorData(Base):
     v6 = Column(Float)
     v7 = Column(Float)
     wifi = Column(Integer, default=0)
-    timestamp = Column(DateTime, default=lambda: datetime.now(UTC))
+    timestamp = Column(DateTime, default=datetime.now)
+
+class BatteryEvent(Base):
+    __tablename__ = "battery_events"
+    id = Column(Integer, primary_key=True, index=True)
+    equipment_id = Column(String, index=True)
+    event_type = Column(String) # POWER_OFF, POWER_ON, CHARGE_START, DISCHARGE_START
+    voltage = Column(Float)
+    timestamp = Column(DateTime, default=datetime.now)
+
+class BatterySession(Base):
+    __tablename__ = "battery_sessions"
+    id = Column(Integer, primary_key=True, index=True)
+    equipment_id = Column(String, index=True)
+    type = Column(String) # CHARGE, DISCHARGE, MAINTENANCE
+    start_time = Column(DateTime)
+    end_time = Column(DateTime, nullable=True)
+    start_voltage = Column(Float)
+    end_voltage = Column(Float, nullable=True)
+    energy_wh = Column(Float, default=0.0)
 
 class Device(Base):
     __tablename__ = "devices"
@@ -65,6 +86,10 @@ class Device(Base):
     v6_offset = Column(Float, default=0.0)
     v7_offset = Column(Float, default=0.0)
     active_sensors = Column(String, default="v1,v2,v3,v4,v5,v6,v7")
+    battery_count = Column(Integer, default=6)
+    min_voltage = Column(Float, default=22.0)
+    last_v7 = Column(Float, nullable=True)
+    last_state = Column(String, default="MAINTENANCE")
 
 # Database initialization
 engine = create_engine(DATABASE_URL)
@@ -72,6 +97,13 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    # Ensure existing rows have defaults for new columns
+    db = SessionLocal()
+    from sqlalchemy import update
+    db.execute(update(Device).where(Device.min_voltage == None).values(min_voltage=22.0))
+    db.execute(update(Device).where(Device.last_state == None).values(last_state="MAINTENANCE"))
+    db.commit()
+    db.close()
 
 
 # Dependency
@@ -98,8 +130,7 @@ class SubscriberSchema(BaseModel):
     secret_code: str
     telegram_id: Optional[int] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class LoginRequest(BaseModel):
     username: str
@@ -118,9 +149,12 @@ class DeviceSchema(BaseModel):
     v6_offset: float
     v7_offset: float
     active_sensors: str
+    battery_count: Optional[int] = 6
+    min_voltage: Optional[float] = 22.0
+    last_v7: Optional[float] = None
+    last_state: Optional[str] = "MAINTENANCE"
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class DeviceUpdate(BaseModel):
     name: Optional[str] = None
@@ -132,9 +166,30 @@ class DeviceUpdate(BaseModel):
     v6_offset: Optional[float] = None
     v7_offset: Optional[float] = None
     active_sensors: Optional[str] = None
+    battery_count: Optional[int] = None
+    min_voltage: Optional[float] = None
+
+class DeviceCreate(BaseModel):
+    equipment_id: str
+    name: str
+    battery_count: int = 6
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialize Admin if not exists
+    admin_username = os.getenv("ADMIN_USERNAME", "admin").strip()
+    admin_password = os.getenv("ADMIN_PASSWORD", "admin").strip()
+    db = SessionLocal()
+    admin = db.query(Admin).filter(Admin.username == admin_username).first()
+    if not admin:
+        admin = Admin(username=admin_username, password=admin_password)
+        db.add(admin)
+        db.commit()
+    db.close()
+    yield
 
 # FastAPI App
-app = FastAPI(title="ChargeTrack API")
+app = FastAPI(title="ChargeTrack API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -143,19 +198,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Initialize Admin if not exists
-@app.on_event("startup")
-def startup_event():
-    admin_username = os.getenv("ADMIN_USERNAME").strip()
-    admin_password = os.getenv("ADMIN_PASSWORD").strip()
-    db = SessionLocal()
-    admin = db.query(Admin).filter(Admin.username == admin_username).first()
-    if not admin:
-        admin = Admin(username=admin_username, password=admin_password)
-        db.add(admin)
-        db.commit()
-    db.close()
 
 # Endpoints
 @app.post("/api/login")
@@ -173,6 +215,22 @@ def get_subscribers(db: Session = Depends(get_db)):
 @app.get("/api/devices", response_model=List[DeviceSchema])
 def get_devices(db: Session = Depends(get_db)):
     return db.query(Device).all()
+
+@app.post("/api/devices", response_model=DeviceSchema)
+def create_device(device: DeviceCreate, db: Session = Depends(get_db)):
+    db_device = db.query(Device).filter(Device.equipment_id == device.equipment_id).first()
+    if db_device:
+        raise HTTPException(status_code=400, detail="Device with this ID already exists")
+    
+    db_device = Device(
+        equipment_id=device.equipment_id,
+        name=device.name,
+        battery_count=device.battery_count
+    )
+    db.add(db_device)
+    db.commit()
+    db.refresh(db_device)
+    return db_device
 
 @app.put("/api/devices/{device_id}", response_model=DeviceSchema)
 def update_device(device_id: int, update: DeviceUpdate, db: Session = Depends(get_db)):

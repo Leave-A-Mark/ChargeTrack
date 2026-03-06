@@ -1,8 +1,9 @@
 from flask import Flask, request, jsonify
 from sqlalchemy.orm import Session
-from datetime import datetime, UTC
+from datetime import datetime
 import pytz
-from main import SessionLocal, SensorData, init_db, Device
+import requests
+from main import SessionLocal, SensorData, init_db, Device, BatteryEvent, BatterySession
 
 # Ensure DB tables are created
 init_db()
@@ -55,12 +56,33 @@ def ensure_device_exists(db: Session, device_id: str):
                 v5_offset=0.0,
                 v6_offset=0.0,
                 v7_offset=0.0,
-                active_sensors="v1,v2,v3,v4,v5,v6,v7"
+                active_sensors="v1,v2,v3,v4,v5,v6,v7",
+                battery_count=6
             )
             db.add(device)
             db.commit()
     except Exception as e:
         print(f"Ошибка при проверке устройства {device_id}: {e}")
+
+def notify_telegram(equipment_id: str, message: str):
+    """Отправить уведомление в Telegram через API бота (упрощенно)"""
+    # В реальности бот имеет свой цикл, но мы можем отправить запрос 
+    # или использовать общую очередь. Для простоты - прямой вызов если токен в env
+    token = os.getenv("BOT_TOKEN")
+    if not token: return
+    
+    db = SessionLocal()
+    from main import BotSubscriber
+    subs = db.query(BotSubscriber).filter(BotSubscriber.equipment_id == equipment_id).all()
+    for sub in subs:
+        if sub.telegram_id:
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            payload = {"chat_id": sub.telegram_id, "text": message, "parse_mode": "HTML"}
+            try:
+                requests.post(url, json=payload, timeout=5)
+            except Exception as e:
+                print(f"Error sending telegram notification: {e}")
+    db.close()
 
 @app.route('/push', methods=['POST'])
 def push_data():
@@ -103,9 +125,98 @@ def push_data():
             v5=round(v5_c, 2), v6=round(v6_c, 2),
             v7=round(v7_c, 2),
             wifi=wifi_signal,
-            timestamp=datetime.now(UTC)
+            timestamp=datetime.now()
         )
         db.add(entry)
+        
+        # --- State Analysis Logic ---
+        device_obj = db.query(Device).filter(Device.equipment_id == device).first()
+        if device_obj:
+            v_prev = device_obj.last_v7
+            v_curr = v7_c
+            old_state = device_obj.last_state
+            new_state = old_state
+            
+            # Constants for universal system (S=2)
+            S = 2
+            V_max = 12.4 * S
+            V_min = 11.5 * S
+            # THRESHOLD_OUTAGE: Above this value, we assume AC is present
+            THRESHOLD_OUTAGE = 25.8 
+
+            if v_curr >= THRESHOLD_OUTAGE:
+                # Based on user feedback: Maintenance is 26.22-26.4V
+                # Charging is higher (Absorption level)
+                if v_curr > 26.6:
+                    new_state = "CHARGING"
+                else:
+                    new_state = "MAINTENANCE"
+            elif v_prev is not None:
+                diff = v_curr - v_prev
+                # Spike filter: only change if significant
+                sens = 0.05 
+                if diff < -sens: # Dropping
+                    new_state = "DISCHARGING"
+                elif diff > sens and v_curr < (V_max * 1.15): # Charging up to absorption
+                    new_state = "CHARGING"
+            
+        # Manage Sessions
+        active_session = db.query(BatterySession).filter(
+            BatterySession.equipment_id == device,
+            BatterySession.end_time == None
+        ).first()
+        
+        # Start session if none exists OR if state changed
+        state_changed = (new_state != old_state)
+        
+        if not active_session or state_changed:
+            if active_session:
+                # Close old session
+                active_session.end_time = datetime.now()
+                active_session.end_voltage = v_curr
+                # Calculate energy for discharge sessions
+                if active_session.type == "DISCHARGE":
+                    v_max = 12.4 * 2
+                    v_min = 11.5 * 2
+                    v_range = v_max - v_min
+                    # Constants: C_one=200, V_nom_one=12, S=2, DoD=0.3
+                    e_safe = (device_obj.battery_count or 6) * 200.0 * 12.0 * 0.3
+                    
+                    v_start = min(active_session.start_voltage, v_max)
+                    # Formula: Wh_used = ((V_start - V_end) / V_range) * E_safe
+                    wh_used = ((v_start - v_curr) / v_range) * e_safe
+                    active_session.energy_wh = round(max(0, wh_used), 2)
+            
+            # Start new session
+            session_type = "MAINTENANCE"
+            if new_state == "DISCHARGING": session_type = "DISCHARGE"
+            elif new_state == "CHARGING": session_type = "CHARGE"
+            
+            db.add(BatterySession(
+                equipment_id=device,
+                type=session_type,
+                start_time=datetime.now(),
+                start_voltage=v_curr
+            ))
+            
+            # Handle Notifications
+            if state_changed:
+                device_obj.last_state = new_state
+                event_type = ""
+                msg = ""
+                if new_state == "DISCHARGING":
+                    event_type = "POWER_OFF"
+                    msg = f"⚠️ <b>ТРИВОГА: Світло вимкнено!</b>\nПристрій: {device_obj.name}\nНапруга: {v_curr:.2f}V\nІнвертор почав розряджати акумулятори."
+                elif old_state == "DISCHARGING" and new_state in ["CHARGING", "MAINTENANCE"]:
+                    event_type = "POWER_ON"
+                    msg = f"🔌 <b>Світло з'явилося!</b>\nПристрій: {device_obj.name}\nНапруга: {v_curr:.2f}V\nПочався процес зарядки/підтримки."
+                
+                if event_type:
+                    db.add(BatteryEvent(equipment_id=device, event_type=event_type, voltage=v_curr))
+                    notify_telegram(device, msg)
+            
+        device_obj.last_v7 = v_curr
+
         db.commit()
         db.close()
 

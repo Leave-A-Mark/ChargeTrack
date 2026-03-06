@@ -33,6 +33,8 @@ interface Device {
   v6_offset: number;
   v7_offset: number;
   active_sensors: string;
+  battery_count: number;
+  min_voltage: number;
 }
 
 const API_URL = import.meta.env.VITE_API_URL || `http://${window.location.hostname}:8000/api`;
@@ -178,20 +180,45 @@ const Dashboard = () => {
   };
 
   const handleDeviceSave = async () => {
-    if (!editingDevice) return;
-    try {
-      const res = await fetch(`${API_URL}/devices/${editingDevice.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(deviceForm),
-      });
-      if (res.ok) {
-        toast.success("Налаштування пристрою збережено");
-        fetchDevices();
-        setDeviceDialogOpen(false);
+    if (editingDevice) {
+      // Редагування існуючого
+      try {
+        const res = await fetch(`${API_URL}/devices/${editingDevice.id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(deviceForm),
+        });
+        if (res.ok) {
+          toast.success("Налаштування пристрою збережено");
+          fetchDevices();
+          setDeviceDialogOpen(false);
+        }
+      } catch (error) {
+        toast.error("Помилка при збереженні пристрою");
       }
-    } catch (error) {
-      toast.error("Помилка при збереженні пристрою");
+    } else {
+      // Створення нового
+      try {
+        const res = await fetch(`${API_URL}/devices`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            equipment_id: deviceForm.equipment_id,
+            name: deviceForm.name,
+            battery_count: deviceForm.battery_count || 6
+          }),
+        });
+        if (res.ok) {
+          toast.success("Пристрій додано успішно");
+          fetchDevices();
+          setDeviceDialogOpen(false);
+        } else {
+          const err = await res.json();
+          toast.error(err.detail || "Помилка при додаванні пристрою");
+        }
+      } catch (error) {
+        toast.error("Помилка при додаванні пристрою");
+      }
     }
   };
 
@@ -425,12 +452,18 @@ const Dashboard = () => {
             </table>
           </div>
         </div>
-        {/* Title + Add Devices */}
         <div className="flex items-center justify-between mt-12 mb-6">
           <div>
             <h2 className="text-2xl font-bold text-foreground">Обладнання</h2>
             <p className="text-sm text-muted-foreground">Керування підключеними пристроями та калібрування</p>
           </div>
+          <Button onClick={() => {
+            setEditingDevice(null);
+            setDeviceForm({ name: "", equipment_id: "", battery_count: 6, active_sensors: "v1,v2,v3,v4,v5,v6,v7" });
+            setDeviceDialogOpen(true);
+          }} className="shadow-lg shadow-primary/20 bg-primary hover:bg-primary/90 transition-all active:scale-95 gap-2">
+            <Plus className="w-4 h-4" /> Додати пристрій
+          </Button>
         </div>
 
         {/* Devices Table */}
@@ -439,7 +472,7 @@ const Dashboard = () => {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-border bg-muted/30">
-                  {["Назва", "ID", "Датчики (активні)", ""].map((h, i) => (
+                  {["Назва", "ID", "Акум.", "Датчики (активні)", ""].map((h, i) => (
                     <th key={i} className={`text-xs font-bold uppercase tracking-wider text-muted-foreground px-6 py-4 text-left`}>
                       {h}
                     </th>
@@ -451,6 +484,7 @@ const Dashboard = () => {
                   <tr key={device.id} className="hover:bg-muted/20 transition-colors group">
                     <td className="px-6 py-4 text-sm font-semibold text-foreground">{device.name}</td>
                     <td className="px-6 py-4 text-xs font-mono text-muted-foreground">{device.equipment_id}</td>
+                    <td className="px-6 py-4 text-sm font-medium">{device.battery_count || 6}</td>
                     <td className="px-6 py-4">
                       <div className="flex flex-wrap gap-1">
                         {device.active_sensors.split(",").filter(Boolean).map(s => (
@@ -493,46 +527,35 @@ const Dashboard = () => {
               />
             </div>
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-semibold text-foreground/80">ID обладнання</label>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setForm({ ...form, equipment_ids: [...form.equipment_ids, ""] })}
-                  className="h-7 text-xs text-primary hover:text-primary hover:bg-primary/10"
-                >
-                  <Plus className="w-3 h-3 mr-1" /> Додати ще
-                </Button>
-              </div>
-              <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
-                {form.equipment_ids.map((id, index) => (
-                  <div key={index} className="flex gap-2">
-                    <Input
-                      value={id}
+              <label className="text-sm font-semibold text-foreground/80">Відстежуване обладнання</label>
+              <div className="grid grid-cols-1 gap-1.5 max-h-48 overflow-y-auto p-2 border border-border rounded-xl bg-muted/20">
+                {devices.length === 0 ? (
+                  <p className="text-xs text-muted-foreground text-center py-4">Спочатку додайте обладнання в таблиці нижче</p>
+                ) : devices.map((device) => (
+                  <label key={device.id} className="flex items-center gap-3 p-2 rounded-lg hover:bg-muted/50 cursor-pointer transition-colors group">
+                    <input
+                      type="checkbox"
+                      className="w-4 h-4 rounded border-border text-primary focus:ring-primary/20 accent-primary"
+                      checked={form.equipment_ids.includes(device.equipment_id)}
                       onChange={(e) => {
-                        const newIds = [...form.equipment_ids];
-                        newIds[index] = e.target.value;
-                        setForm({ ...form, equipment_ids: newIds });
+                        const ids = [...form.equipment_ids];
+                        if (e.target.checked) {
+                          ids.push(device.equipment_id);
+                        } else {
+                          const index = ids.indexOf(device.equipment_id);
+                          if (index > -1) ids.splice(index, 1);
+                        }
+                        setForm({ ...form, equipment_ids: ids });
                       }}
-                      placeholder="EQUIP-001"
-                      className="bg-muted/50 border-border focus:ring-2 focus:ring-primary/20 transition-all flex-1"
                     />
-                    {form.equipment_ids.length > 1 && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => {
-                          const newIds = form.equipment_ids.filter((_, i) => i !== index);
-                          setForm({ ...form, equipment_ids: newIds });
-                        }}
-                        className="h-10 w-10 text-muted-foreground hover:text-destructive transition-colors shrink-0"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    )}
-                  </div>
+                    <div className="flex flex-col">
+                      <span className="text-sm font-medium group-hover:text-primary transition-colors">{device.name}</span>
+                      <span className="text-[10px] font-mono text-muted-foreground uppercase">{device.equipment_id}</span>
+                    </div>
+                  </label>
                 ))}
               </div>
+              <p className="text-[10px] text-muted-foreground px-1 italic">Оберіть пристрої для моніторингу цим користувачем</p>
             </div>
             <Button onClick={handleSave} className="w-full h-11 text-base font-semibold shadow-lg shadow-primary/20">
               {editingUser ? "Зберегти зміни" : "Створити підписку"}
@@ -572,22 +595,64 @@ const Dashboard = () => {
       <Dialog open={deviceDialogOpen} onOpenChange={setDeviceDialogOpen}>
         <DialogContent className="sm:max-w-lg border-border bg-card shadow-2xl">
           <DialogHeader>
-            <DialogTitle className="text-xl font-bold">Налаштування пристрою: {editingDevice?.equipment_id}</DialogTitle>
+            <DialogTitle className="text-xl font-bold">
+              {editingDevice ? `Налаштування: ${editingDevice.equipment_id}` : "Додати нове обладнання"}
+            </DialogTitle>
           </DialogHeader>
-          <div className="space-y-6 mt-4">
-            <div className="space-y-2">
-              <label className="text-sm font-semibold text-foreground/80">Назва пристрою</label>
-              <Input
-                value={deviceForm.name || ""}
-                onChange={(e) => setDeviceForm({ ...deviceForm, name: e.target.value })}
-                placeholder="Назва"
-                className="bg-muted/50"
-              />
+          <div className="space-y-4 mt-4 max-h-[70vh] overflow-y-auto px-1">
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-sm font-semibold text-foreground/80">Назва пристрою</label>
+                <Input
+                  value={deviceForm.name || ""}
+                  onChange={(e) => setDeviceForm({ ...deviceForm, name: e.target.value })}
+                  placeholder="Домашній ДБЖ"
+                  className="bg-muted/50"
+                />
+              </div>
+
+              {!editingDevice && (
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-foreground/80">ID обладнання (ID в скетчі)</label>
+                  <Input
+                    value={deviceForm.equipment_id || ""}
+                    onChange={(e) => setDeviceForm({ ...deviceForm, equipment_id: e.target.value })}
+                    placeholder="Наприклад: ARDUINO_01"
+                    className="bg-muted/50 border-border focus:ring-2 focus:ring-primary/20"
+                  />
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase text-muted-foreground">Кількість акумуляторів</label>
+                  <Input
+                    type="number"
+                    min="1"
+                    max="6"
+                    value={deviceForm.battery_count || 6}
+                    onChange={(e) => setDeviceForm({ ...deviceForm, battery_count: parseInt(e.target.value) })}
+                    className="bg-muted/50 border-border"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase text-muted-foreground">Поріг розряду (V)</label>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    min="20"
+                    max="30"
+                    value={deviceForm.min_voltage || 22.0}
+                    onChange={(e) => setDeviceForm({ ...deviceForm, min_voltage: parseFloat(e.target.value) })}
+                    className="bg-muted/50 border-border"
+                  />
+                </div>
+              </div>
             </div>
 
-            <div>
-              <label className="text-sm font-semibold text-foreground/80 block mb-3">Корекція напруги (V)</label>
-              <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-3">
+              <label className="text-sm font-semibold text-foreground/80 block">Корекція напруги (V)</label>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2">
                 {["v1", "v2", "v3", "v4", "v5", "v6", "v7"].map(v => (
                   <div key={v} className="flex items-center gap-2">
                     <span className="text-xs font-bold w-6 uppercase text-muted-foreground">{v}:</span>
@@ -603,8 +668,8 @@ const Dashboard = () => {
               </div>
             </div>
 
-            <div>
-              <label className="text-sm font-semibold text-foreground/80 block mb-3">Активні датчики</label>
+            <div className="space-y-3">
+              <label className="text-sm font-semibold text-foreground/80 block">Активні датчики</label>
               <div className="flex flex-wrap gap-2">
                 {["v1", "v2", "v3", "v4", "v5", "v6", "v7"].map(v => (
                   <Button
@@ -612,16 +677,16 @@ const Dashboard = () => {
                     variant={deviceForm.active_sensors?.includes(v) ? "default" : "outline"}
                     size="sm"
                     onClick={() => toggleSensor(v)}
-                    className="h-8 px-3 text-xs uppercase font-bold"
+                    className="h-8 px-3 text-[10px] uppercase font-bold"
                   >
-                    {v}
+                    {v === "v7" ? "Загальна" : `Акум ${v.slice(1)}`}
                   </Button>
                 ))}
               </div>
             </div>
 
-            <Button onClick={handleDeviceSave} className="w-full h-11 text-base font-semibold shadow-lg shadow-primary/20">
-              Зберегти налаштування
+            <Button onClick={handleDeviceSave} className="w-full h-11 mt-4 text-base font-semibold shadow-lg shadow-primary/20">
+              {editingDevice ? "Зберегти налаштування" : "Додати обладнання"}
             </Button>
           </div>
         </DialogContent>
@@ -657,7 +722,7 @@ const Dashboard = () => {
           </div>
         </DialogContent>
       </Dialog>
-    </div>
+    </div >
   );
 };
 
