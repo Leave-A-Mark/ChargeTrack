@@ -36,15 +36,12 @@ scheduler = AsyncIOScheduler()
 
 # Keyboards
 def get_main_keyboard():
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📊 Моніторинг")],
-            [KeyboardButton(text="📈 Графік"), KeyboardButton(text="🔍 Деталі")],
-            [KeyboardButton(text="➕ Додати пристрій")]
-        ],
-        resize_keyboard=True
-    )
-    return keyboard
+    keyboard = [
+        [KeyboardButton(text="📊 Моніторинг"), KeyboardButton(text="📈 Графік")],
+        [KeyboardButton(text="🔍 Деталі"), KeyboardButton(text="➕ Додати код користувача")],
+        [KeyboardButton(text="🛑 Відключення")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
 def get_device_selection_kb(db: Session, user_id: int, action: str):
     subs = db.query(BotSubscriber).filter(BotSubscriber.telegram_id == user_id).all()
@@ -53,12 +50,17 @@ def get_device_selection_kb(db: Session, user_id: int, action: str):
     
     keyboard = []
     for sub in subs:
-        device_obj = db.query(Device).filter(Device.equipment_id == sub.equipment_id).first()
-        name = device_obj.name if device_obj else sub.equipment_id
-        keyboard.append([InlineKeyboardButton(text=name, callback_data=f"sel:{action}:{sub.equipment_id}")])
+        # Разделяем ID оборудования, если их несколько
+        equipment_ids = [eid.strip() for eid in sub.equipment_id.split(",") if eid.strip()]
+        for eid in equipment_ids:
+            device_obj = db.query(Device).filter(Device.equipment_id == eid).first()
+            dev_name = device_obj.name if device_obj else eid
+            # Показываем имя устройства и имя подписчика
+            button_text = f"{dev_name} ({sub.name})"
+            keyboard.append([InlineKeyboardButton(text=button_text, callback_data=f"sel:{action}:{sub.id}:{eid}")])
     
-    if len(subs) > 1:
-        keyboard.append([InlineKeyboardButton(text="✨ Всі пристрої разом", callback_data=f"sel:{action}:all")])
+    if len(keyboard) > 1:
+        keyboard.append([InlineKeyboardButton(text="✨ Всі пристрої разом", callback_data=f"sel:{action}:all:all")])
     
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
@@ -96,7 +98,7 @@ def create_voltage_graph(db: Session, device_id: str, data: list):
 
     plt.title(f"Напруга за 24г: {device_name}")
     plt.xlabel("Час")
-    plt.ylabel("Вольтаж (V)")
+    plt.ylabel("Напруга (V)")
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.xticks(rotation=45)
@@ -164,27 +166,31 @@ def create_detailed_voltage_graph(db: Session, device_id: str, data: list):
 
 async def send_morning_reports():
     db = SessionLocal()
-    # Получаем уникальных пользователей с телеграм-айди
+    # Отримуємо унікальних користувачів з телеграм-айді
     user_ids = [r[0] for r in db.query(BotSubscriber.telegram_id).filter(BotSubscriber.telegram_id != None).distinct().all()]
     
     for uid in user_ids:
-        # Для каждого пользователя находим все его устройства
+        # Для кожного користувача знаходимо всі його підписки (ідентичності)
         subs = db.query(BotSubscriber).filter(BotSubscriber.telegram_id == uid).all()
         for sub in subs:
             try:
-                cutoff = datetime.now(UTC) - timedelta(hours=24)
-                data = db.query(SensorData).filter(
-                    SensorData.equipment_id == sub.equipment_id,
-                    SensorData.timestamp >= cutoff
-                ).order_by(SensorData.timestamp).all()
-                
-                if data:
-                    photo_buf = create_voltage_graph(db, sub.equipment_id, data)
-                    if photo_buf:
-                        photo = BufferedInputFile(photo_buf.getvalue(), filename="graph.png")
-                        device_obj = db.query(Device).filter(Device.equipment_id == sub.equipment_id).first()
-                        device_name = device_obj.name if device_obj else sub.equipment_id
-                        await bot.send_photo(uid, photo, caption=f"🌅 Доброго ранку! Графік за останні 24 години для {device_name}")
+                # Розділяємо ID обладнання
+                equipment_ids = [eid.strip() for eid in sub.equipment_id.split(",") if eid.strip()]
+                for eid in equipment_ids:
+                    cutoff = datetime.now(UTC) - timedelta(hours=24)
+                    data = db.query(SensorData).filter(
+                        SensorData.equipment_id == eid,
+                        SensorData.timestamp >= cutoff
+                    ).order_by(SensorData.timestamp).all()
+                    
+                    if data:
+                        photo_buf = create_voltage_graph(db, eid, data)
+                        if photo_buf:
+                            photo = BufferedInputFile(photo_buf.getvalue(), filename="graph.png")
+                            device_obj = db.query(Device).filter(Device.equipment_id == eid).first()
+                            dev_name = device_obj.name if device_obj else eid
+                            caption = f"🌅 Доброго ранку! Графік за останні 24 години для {dev_name} ({sub.name})"
+                            await bot.send_photo(uid, photo, caption=caption)
             except Exception as e:
                 logger.error(f"Error sending report to {uid} for {sub.equipment_id}: {e}")
     db.close()
@@ -193,8 +199,8 @@ async def send_morning_reports():
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     await message.answer(
-        "👋 Привет! Я бот ChargeTrack.\n\n"
-        "Чтобы получать данные, введите секретный код, выданный администратором.",
+        "👋 Вітаємо! Я бот ChargeTrack.\n\n"
+        "Щоб отримувати дані, введіть секретний код, виданий адміністратором.",
         reply_markup=get_main_keyboard()
     )
 
@@ -207,15 +213,25 @@ async def btn_monitoring(message: types.Message):
         db.close()
         return
 
-    if len(subs) > 1:
+    if len(subs) > 1 or (len(subs) == 1 and "," in subs[0].equipment_id):
         kb = get_device_selection_kb(db, message.from_user.id, "mon")
         await message.answer("Оберіть пристрій для моніторингу:", reply_markup=kb)
     else:
-        await process_monitor(message, subs[0].equipment_id)
+        # Якщо підписки немає, subs пустий, обробиться вище. 
+        # Якщо одна підписка з одним ID:
+        eid = subs[0].equipment_id.strip()
+        await process_monitor(message, subs[0].id, eid)
     db.close()
 
-async def process_monitor(message: types.Message, equipment_id: str):
+async def process_monitor(message: types.Message, sub_id: int, equipment_id: str):
     db = SessionLocal()
+    sub = db.query(BotSubscriber).filter(BotSubscriber.id == sub_id).first()
+    if not sub:
+        await message.answer("Помилка: Підписку не знайдено.")
+        db.close()
+        return
+
+    # equipment_id використовується з аргументів
     data = db.query(SensorData).filter(SensorData.equipment_id == equipment_id).order_by(SensorData.timestamp.desc()).first()
     
     if not data and MOCK_MODE:
@@ -234,17 +250,17 @@ async def process_monitor(message: types.Message, equipment_id: str):
 
     if not data:
         device_obj = db.query(Device).filter(Device.equipment_id == equipment_id).first()
-        device_name = device_obj.name if device_obj else equipment_id
-        await message.answer(f"Дані для {device_name} поки не надійшли.")
+        dev_name = device_obj.name if device_obj else equipment_id
+        await message.answer(f"Дані для <b>{html.escape(dev_name)} ({sub.name})</b> поки не надійшли.", parse_mode="HTML")
     else:
         device_obj = db.query(Device).filter(Device.equipment_id == equipment_id).first()
-        device_name = device_obj.name if device_obj else equipment_id
+        dev_name = device_obj.name if device_obj else equipment_id
         active_sensors_str = device_obj.active_sensors if device_obj else "v1,v2,v3,v4,v5,v6,v7"
         active_sensors = active_sensors_str.split(",")
         
         is_mock = " (MOCK)" if not hasattr(data, 'id') else ""
-        safe_name = html.escape(device_name)
-        text = f"🔌 <b>{safe_name}</b>{is_mock}\n"
+        safe_name = html.escape(dev_name)
+        text = f"🔌 <b>{safe_name} ({sub.name})</b>{is_mock}\n"
         text += f"🕒 Час: {to_local_time(data.timestamp).strftime('%H:%M:%S')}\n"
         
         for s in ["v1", "v2", "v3", "v4", "v5", "v6"]:
@@ -271,15 +287,23 @@ async def btn_graph(message: types.Message):
         db.close()
         return
 
-    if len(subs) > 1:
+    if len(subs) > 1 or (len(subs) == 1 and "," in subs[0].equipment_id):
         kb = get_device_selection_kb(db, message.from_user.id, "gra")
         await message.answer("Оберіть пристрій для графіка:", reply_markup=kb)
     else:
-        await process_graph(message, subs[0].equipment_id)
+        eid = subs[0].equipment_id.strip()
+        await process_graph(message, subs[0].id, eid)
     db.close()
 
-async def process_graph(message: types.Message, equipment_id: str):
+async def process_graph(message: types.Message, sub_id: int, equipment_id: str):
     db = SessionLocal()
+    sub = db.query(BotSubscriber).filter(BotSubscriber.id == sub_id).first()
+    if not sub:
+        await message.answer("Помилка: Підписку не знайдено.")
+        db.close()
+        return
+
+    # equipment_id використовується з аргументів
     cutoff = datetime.now(UTC) - timedelta(hours=24)
     data = db.query(SensorData).filter(
         SensorData.equipment_id == equipment_id,
@@ -291,17 +315,17 @@ async def process_graph(message: types.Message, equipment_id: str):
 
     if not data:
         device_obj = db.query(Device).filter(Device.equipment_id == equipment_id).first()
-        device_name = device_obj.name if device_obj else equipment_id
-        await message.answer(f"Немає даних за останні 24 години для {device_name}.")
+        dev_name = device_obj.name if device_obj else equipment_id
+        await message.answer(f"Немає даних за останні 24 години для {html.escape(dev_name)} ({sub.name}).")
     else:
         photo_buf = create_voltage_graph(db, equipment_id, data)
         if photo_buf:
             photo = BufferedInputFile(photo_buf.getvalue(), filename="graph.png")
             device_obj = db.query(Device).filter(Device.equipment_id == equipment_id).first()
-            device_name = device_obj.name if device_obj else equipment_id
+            dev_name = device_obj.name if device_obj else equipment_id
             is_mock = " (MOCK)" if MOCK_MODE and len(data) > 0 and not hasattr(data[0], 'id') else ""
-            safe_name = html.escape(device_name)
-            caption = f"Історія напруг за 24г для {safe_name}{is_mock}"
+            safe_name = html.escape(dev_name)
+            caption = f"Історія напруг за 24г для {safe_name} ({sub.name}){is_mock}"
             await bot.send_photo(message.chat.id, photo, caption=caption, parse_mode="HTML")
     db.close()
 
@@ -314,15 +338,23 @@ async def btn_details(message: types.Message):
         db.close()
         return
 
-    if len(subs) > 1:
+    if len(subs) > 1 or (len(subs) == 1 and "," in subs[0].equipment_id):
         kb = get_device_selection_kb(db, message.from_user.id, "det")
         await message.answer("Оберіть пристрій для деталей:", reply_markup=kb)
     else:
-        await process_details(message, subs[0].equipment_id)
+        eid = subs[0].equipment_id.strip()
+        await process_details(message, subs[0].id, eid)
     db.close()
 
-async def process_details(message: types.Message, equipment_id: str):
+async def process_details(message: types.Message, sub_id: int, equipment_id: str):
     db = SessionLocal()
+    sub = db.query(BotSubscriber).filter(BotSubscriber.id == sub_id).first()
+    if not sub:
+        await message.answer("Помилка: Підписку не знайдено.")
+        db.close()
+        return
+
+    # equipment_id використовується з аргументів
     cutoff = datetime.now(UTC) - timedelta(hours=24)
     data = db.query(SensorData).filter(
         SensorData.equipment_id == equipment_id,
@@ -334,17 +366,17 @@ async def process_details(message: types.Message, equipment_id: str):
 
     if not data:
         device_obj = db.query(Device).filter(Device.equipment_id == equipment_id).first()
-        device_name = device_obj.name if device_obj else equipment_id
-        await message.answer(f"Немає даних за останні 24 години для {device_name}.")
+        dev_name = device_obj.name if device_obj else equipment_id
+        await message.answer(f"Немає даних за останні 24 години для {html.escape(dev_name)} ({sub.name}).")
     else:
         photo_buf = create_detailed_voltage_graph(db, equipment_id, data)
         if photo_buf:
             photo = BufferedInputFile(photo_buf.getvalue(), filename="details.png")
             device_obj = db.query(Device).filter(Device.equipment_id == equipment_id).first()
-            device_name = device_obj.name if device_obj else equipment_id
+            dev_name = device_obj.name if device_obj else equipment_id
             is_mock = " (MOCK)" if MOCK_MODE and len(data) > 0 and not hasattr(data[0], 'id') else ""
-            safe_name = html.escape(device_name)
-            caption = f"Детальні графіки датчиків для {safe_name}{is_mock}"
+            safe_name = html.escape(dev_name)
+            caption = f"Детальні графіки датчиків для {safe_name} ({sub.name}){is_mock}"
             await bot.send_photo(message.chat.id, photo, caption=caption, parse_mode="HTML")
         else:
             await message.answer(f"Немає активних датчиків для пристрою {equipment_id}.")
@@ -353,28 +385,105 @@ async def process_details(message: types.Message, equipment_id: str):
 @dp.callback_query(F.data.startswith("sel:"))
 async def callback_select_device(callback: types.CallbackQuery):
     try:
-        _, action, eq_id = callback.data.split(":")
+        parts = callback.data.split(":")
+        action = parts[1]
+        sub_id_str = parts[2]
+        target_eid = parts[3] if len(parts) > 3 else "all"
+
         db = SessionLocal()
         
-        if eq_id == "all":
+        # Список кортежей (sub_id, equipment_id)
+        tasks = []
+
+        if sub_id_str == "all":
             subs = db.query(BotSubscriber).filter(BotSubscriber.telegram_id == callback.from_user.id).all()
-            ids = [s.equipment_id for s in subs]
+            for s in subs:
+                eids = [i.strip() for i in s.equipment_id.split(",") if i.strip()]
+                for eid in eids:
+                    tasks.append((s.id, eid))
         else:
-            ids = [eq_id]
+            sid = int(sub_id_str)
+            if target_eid == "all":
+                s = db.query(BotSubscriber).filter(BotSubscriber.id == sid).first()
+                if s:
+                    eids = [i.strip() for i in s.equipment_id.split(",") if i.strip()]
+                    for eid in eids:
+                        tasks.append((s.id, eid))
+            else:
+                tasks.append((sid, target_eid))
             
         await callback.answer()
-        for eid in ids:
-            if action == "mon": await process_monitor(callback.message, eid)
-            elif action == "gra": await process_graph(callback.message, eid)
-            elif action == "det": await process_details(callback.message, eid)
+        for sid, eid in tasks:
+            if action == "mon": await process_monitor(callback.message, sid, eid)
+            elif action == "gra": await process_graph(callback.message, sid, eid)
+            elif action == "det": await process_details(callback.message, sid, eid)
         
         db.close()
     except Exception as e:
         logger.error(f"Error in callback_select_device: {e}")
 
-@dp.message(F.text == "➕ Додати пристрій")
+@dp.message(F.text == "➕ Додати код користувача")
 async def btn_add_device(message: types.Message):
-    await message.answer("Надішліть секретний код нового пристрою.")
+    await message.answer("Надішліть секретний код нового користувача.")
+
+@dp.message(F.text == "🛑 Відключення")
+async def btn_disconnect_prompt(message: types.Message):
+    db = SessionLocal()
+    subs = db.query(BotSubscriber).filter(BotSubscriber.telegram_id == message.from_user.id).all()
+    if not subs:
+        await message.answer("У вас немає активних підписок.")
+        db.close()
+        return
+    
+    kb = [
+        [InlineKeyboardButton(text="❌ Відключити все", callback_data="disc:all")],
+        [InlineKeyboardButton(text="🔍 Окремий пристрій", callback_data="disc:select")]
+    ]
+    await message.answer("Бажаєте відключити всі пристрої чи якийсь конкретний?", 
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+    db.close()
+
+@dp.callback_query(F.data.startswith("disc:"))
+async def callback_disconnect(callback: types.CallbackQuery):
+    action = callback.data.split(":")[1]
+    db = SessionLocal()
+    
+    if action == "all":
+        db.query(BotSubscriber).filter(BotSubscriber.telegram_id == callback.from_user.id).update({"telegram_id": None})
+        db.commit()
+        await callback.message.answer("✅ Всі сповіщення вимкнено. Щоб повернути, введіть секретний код знову.")
+        await callback.answer()
+    
+    elif action == "select":
+        subs = db.query(BotSubscriber).filter(BotSubscriber.telegram_id == callback.from_user.id).all()
+        kb = []
+        for s in subs:
+            # Беремо перше ім'я пристрою для простоти
+            eid = s.equipment_id.split(",")[0].strip()
+            device_obj = db.query(Device).filter(Device.equipment_id == eid).first()
+            dev_name = device_obj.name if device_obj else eid
+            kb.append([InlineKeyboardButton(text=f"{dev_name} ({s.name})", callback_data=f"do_disc:{s.id}")])
+        
+        await callback.message.edit_text("Оберіть підписку для відключення:", 
+                                         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb))
+        await callback.answer()
+    db.close()
+
+@dp.callback_query(F.data.startswith("do_disc:"))
+async def callback_do_disconnect(callback: types.CallbackQuery):
+    sub_id = int(callback.data.split(":")[1])
+    db = SessionLocal()
+    sub = db.query(BotSubscriber).filter(BotSubscriber.id == sub_id, 
+                                         BotSubscriber.telegram_id == callback.from_user.id).first()
+    if sub:
+        sub.telegram_id = None
+        db.commit()
+        await callback.message.answer(f"✅ Сповіщення для {sub.name} вимкнено.")
+    
+    await callback.answer()
+    db.close()
+    # Пропонуємо головне меню знову, якщо залишились підписки
+    # (AIogram автоматично оновить клавіатуру наступним повідомленням)
 
 def generate_mock_history(equipment_id):
     # Helper to avoid code duplication
@@ -405,9 +514,19 @@ async def handle_secret_code(message: types.Message):
     if sub:
         sub.telegram_id = message.from_user.id
         db.commit()
-        device_obj = db.query(Device).filter(Device.equipment_id == sub.equipment_id).first()
-        device_name = device_obj.name if device_obj else sub.equipment_id
-        await message.answer(f"✅ Успішно! Ви приєднані до пристрою: {device_name}", reply_markup=get_main_keyboard())
+        
+        # Обробляємо кілька ID, якщо вони є
+        eids = [eid.strip() for eid in sub.equipment_id.split(",") if eid.strip()]
+        names = []
+        for eid in eids:
+            device_obj = db.query(Device).filter(Device.equipment_id == eid).first()
+            names.append(device_obj.name if device_obj else eid)
+        
+        dev_names_str = ", ".join(names)
+        await message.answer(f"✅ Успішно! Ви приєднані до: <b>{html.escape(dev_names_str)}</b> (як {sub.name})", 
+                             reply_markup=get_main_keyboard(), parse_mode="HTML")
+    else:
+        await message.answer("❌ Код не знайдено або він невірний.")
     db.close()
 
 async def main():

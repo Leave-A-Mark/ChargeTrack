@@ -6,8 +6,7 @@ from datetime import datetime, UTC
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Boolean
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session, relationship
+from sqlalchemy.orm import sessionmaker, Session, relationship, declarative_base
 from pydantic import BaseModel
 
 from dotenv import load_dotenv
@@ -74,8 +73,6 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def init_db():
     Base.metadata.create_all(bind=engine)
 
-if __name__ == "__main__":
-    init_db()
 
 # Dependency
 def get_db():
@@ -196,6 +193,10 @@ def delete_device(device_id: int, db: Session = Depends(get_db)):
     device = db.query(Device).filter(Device.id == device_id).first()
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
+    
+    # Видаляємо всі дані сенсорів для цього обладнання
+    db.query(SensorData).filter(SensorData.equipment_id == device.equipment_id).delete()
+    
     db.delete(device)
     db.commit()
     return {"status": "success"}
@@ -251,3 +252,8 @@ def generate_mock_data(equipment_id: str) -> dict:
         "v7": round(random.uniform(26.0, 27.0), 2)
     }
     return data
+
+if __name__ == "__main__":
+    import uvicorn
+    init_db()
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
