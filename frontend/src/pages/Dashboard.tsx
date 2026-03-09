@@ -182,11 +182,23 @@ const Dashboard = () => {
   const handleDeviceSave = async () => {
     if (editingDevice) {
       // Редагування існуючого
+      const payload = { ...deviceForm };
+
+      // Defaulting numeric fields if they were cleared
+      ["v1", "v2", "v3", "v4", "v5", "v6", "v7"].forEach(v => {
+        const key = `${v}_offset` as keyof Device;
+        if (payload[key] === undefined || isNaN(payload[key] as any)) {
+          (payload as any)[key] = 0;
+        }
+      });
+      if (payload.battery_count === undefined || isNaN(payload.battery_count)) payload.battery_count = 6;
+      if (payload.min_voltage === undefined || isNaN(payload.min_voltage)) payload.min_voltage = 22.0;
+
       try {
         const res = await fetch(`${API_URL}/devices/${editingDevice.id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(deviceForm),
+          body: JSON.stringify(payload),
         });
         if (res.ok) {
           toast.success("Налаштування пристрою збережено");
@@ -630,8 +642,11 @@ const Dashboard = () => {
                     type="number"
                     min="1"
                     max="6"
-                    value={deviceForm.battery_count || 6}
-                    onChange={(e) => setDeviceForm({ ...deviceForm, battery_count: parseInt(e.target.value) })}
+                    value={deviceForm.battery_count ?? ""}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setDeviceForm({ ...deviceForm, battery_count: val === "" ? undefined : parseInt(val) });
+                    }}
                     className="bg-muted/50 border-border"
                   />
                 </div>
@@ -642,8 +657,11 @@ const Dashboard = () => {
                     step="0.1"
                     min="20"
                     max="30"
-                    value={deviceForm.min_voltage || 22.0}
-                    onChange={(e) => setDeviceForm({ ...deviceForm, min_voltage: parseFloat(e.target.value) })}
+                    value={deviceForm.min_voltage ?? ""}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setDeviceForm({ ...deviceForm, min_voltage: val === "" ? undefined : parseFloat(val) });
+                    }}
                     className="bg-muted/50 border-border"
                   />
                 </div>
@@ -659,8 +677,11 @@ const Dashboard = () => {
                     <Input
                       type="number"
                       step="0.01"
-                      value={deviceForm[`${v}_offset` as keyof Device] || 0}
-                      onChange={(e) => setDeviceForm({ ...deviceForm, [`${v}_offset`]: parseFloat(e.target.value) })}
+                      value={deviceForm[`${v}_offset` as keyof Device] ?? ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setDeviceForm({ ...deviceForm, [`${v}_offset`]: val === "" ? undefined : parseFloat(val) });
+                      }}
                       className="h-8 text-xs bg-muted/30"
                     />
                   </div>
