@@ -78,7 +78,7 @@ def create_voltage_graph(db: Session, device_id: str, data: list):
     
     # Get device settings from DB
     device_obj = db.query(Device).filter(Device.equipment_id == device_id).first()
-    active_sensors_str = device_obj.active_sensors if device_obj else "v1,v2,v3,v4,v5,v6,v7"
+    active_sensors_str = (device_obj.active_sensors if device_obj else "v1,v2,v3,v4,v5,v6,v7") or "v1,v2,v3,v4,v5,v6,v7"
     active_sensors = active_sensors_str.split(",")
     device_name = device_obj.name if device_obj else device_id
     
@@ -110,7 +110,7 @@ def create_detailed_voltage_graph(db: Session, device_id: str, data: list):
         return None
         
     device_obj = db.query(Device).filter(Device.equipment_id == device_id).first()
-    active_sensors_str = device_obj.active_sensors if device_obj else "v1,v2,v3,v4,v5,v6,v7"
+    active_sensors_str = (device_obj.active_sensors if device_obj else "v1,v2,v3,v4,v5,v6,v7") or "v1,v2,v3,v4,v5,v6,v7"
     active_sensors = [s for s in active_sensors_str.split(",") if s != "v7" and s.startswith("v")]
     
     if not active_sensors:
@@ -253,7 +253,7 @@ async def process_monitor(message: types.Message, sub_id: int, equipment_id: str
     else:
         device_obj = db.query(Device).filter(Device.equipment_id == equipment_id).first()
         dev_name = device_obj.name if device_obj else equipment_id
-        active_sensors_str = device_obj.active_sensors if device_obj else "v1,v2,v3,v4,v5,v6,v7"
+        active_sensors_str = (device_obj.active_sensors if device_obj else "v1,v2,v3,v4,v5,v6,v7") or "v1,v2,v3,v4,v5,v6,v7"
         active_sensors = active_sensors_str.split(",")
         
         is_mock = " (MOCK)" if not hasattr(data, 'id') else ""
@@ -261,9 +261,9 @@ async def process_monitor(message: types.Message, sub_id: int, equipment_id: str
         text = f"🔌 <b>{safe_name} ({sub.name})</b>{is_mock}\n"
         text += f"🕒 Час: {to_local_time(data.timestamp).strftime('%H:%M:%S')}\n\n"
         
-        battery_count = device_obj.battery_count if device_obj else 6
+        battery_count = (device_obj.battery_count if device_obj else 6) or 6
         
-        for i in range(1, battery_count - 1):
+        for i in range(1, battery_count + 1):
             s_key = f"v{i}"
             if s_key in active_sensors:
                 val = getattr(data, s_key)
