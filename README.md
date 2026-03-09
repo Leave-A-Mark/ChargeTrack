@@ -37,9 +37,10 @@
    ```
 5. Установите зависимости:
    ```bash
-   pip install fastapi uvicorn sqlalchemy aiogram pydantic python-dotenv psycopg2-binary matplotlib apscheduler pytz
+   pip install -r requirements.txt
+    python-multipart
    ```
-6. Запустите API сервер (для доступа из локальной сети используйте `--host 0.0.0.0`):
+6. Запустите основной API сервер (для доступа из локальной сети используйте `--host 0.0.0.0`):
    ```bash
    uvicorn main:app --host 0.0.0.0 --port 8000 --reload
    ```
@@ -47,7 +48,7 @@
    ```bash
    python bot.py
    ```
-8. Запустите сервер приема данных от датчиков (если есть реальные данные):
+8. Запустите сервер приема данных от датчиков (теперь на FastAPI, порт 8089):
    ```bash
    python serv.py
    ```
