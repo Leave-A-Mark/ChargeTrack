@@ -259,7 +259,7 @@ async def process_monitor(message: types.Message, sub_id: int, equipment_id: str
         is_mock = " (MOCK)" if not hasattr(data, 'id') else ""
         safe_name = html.escape(dev_name)
         text = f"🔌 <b>{safe_name} ({sub.name})</b>{is_mock}\n"
-        text += f"🕒 Час: {to_local_time(data.timestamp).strftime('%H:%M:%S')}\n\n"
+        text += f"🕒 Час: {to_local_time(data.timestamp).strftime('%d.%m.%Y %H:%M:%S')}\n\n"
         
         battery_count = (device_obj.battery_count if device_obj else 6) or 6
         
